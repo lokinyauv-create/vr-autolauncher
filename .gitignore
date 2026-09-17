@@ -1,4 +1,7 @@
 dist_build/
+build/
+dist/
+*.spec
 VRAutoLauncher-Setup.exe
 __pycache__/
 *.pyc
