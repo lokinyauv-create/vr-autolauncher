@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=VR Auto Launcher
+Name[uk]=VR Автозапуск
+Comment=Starts VR companion apps when SteamVR and VRChat come up
+Comment[uk]=Запускає VR-програми, коли стартують SteamVR і VRChat
+Exec=@BIN@
+Icon=vr-autolauncher
+Terminal=false
+Categories=Game;Utility;Settings;
+Keywords=VR;SteamVR;VRChat;autostart;launcher;
+StartupNotify=false
+X-GNOME-Autostart-Delay=5
