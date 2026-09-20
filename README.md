@@ -24,7 +24,7 @@ pausing/resuming Wallpaper Engine.
 
 ## Features
 
-- **Settings window** (Linux): add programs from your Steam library, installed applications or
+- **Settings window** (same on Linux and Windows): add programs from your Steam library, installed applications or
   any file/AppImage; choose what triggers each one (SteamVR, VRChat, both, or any running
   process, all/any of them) and the delay in seconds; test-launch before saving.
 - Any number of apps, each with its own trigger processes, delay and command
@@ -33,7 +33,12 @@ pausing/resuming Wallpaper Engine.
   or restarts it if it crashes (up to 5 times per session).
 - Per-app environment variables.
 - Tray menu: status/countdown, settings, pause auto-launch, enable/disable each app,
-  **Launch now**, open log.
+  open log, and a **Right now** section with **✕ Close** (running) / **▶ Start** (stopped)
+  for every app.
+- A **✖ / ▶** button on every row of the settings window does the same: **✖** force-closes the
+  program at once (SIGTERM, then SIGKILL after 3 s) and keeps it down — no launch, no
+  keep-alive restart — until the VR session ends or you press **▶**. The auto-start checkbox
+  next to it is unchanged; untick that to stop it from ever starting.
 - Start with the system: a switch in the settings window.
 - The config file is re-read automatically when you save it.
 - Desktop notifications on Linux (`notify-send`).
@@ -43,15 +48,17 @@ pausing/resuming Wallpaper Engine.
 
 ## Linux
 
-Dependencies come from your distro (no pip needed):
+The interface needs Qt for Python (PySide6); nothing else:
 
 ```bash
 # Fedora
-sudo dnf install python3-gobject libappindicator-gtk3 python3-pillow
+sudo dnf install python3-pyside6
 # Debian/Ubuntu
-sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1 python3-pil
+sudo apt install python3-pyside6
 # Arch
-sudo pacman -S python-gobject libayatana-appindicator python-pillow
+sudo pacman -S pyside6
+# or, on any distro
+pip install --user pyside6
 ```
 
 On **GNOME** the tray icon needs the
@@ -64,6 +71,9 @@ Install for your user (adds it to the app menu and to autostart, then starts it)
 linux/install.sh                 # --no-autostart, --no-start
 linux/uninstall.sh               # keeps config and logs
 ```
+
+It installs into `~/.local/share/vr-autolauncher`, so **rerun it after changing the sources** —
+the installed copy is what autostart runs.
 
 Opening **VR Auto Launcher** from the app menu (or running it again) shows the settings
 window; autostart puts it in the tray only.
@@ -93,33 +103,41 @@ Linux notes:
 
 ## Windows
 
-Requires Python 3 with `pystray` and `pillow`:
+Same settings window, tray icon and features as on Linux. Needs
+[Python 3](https://www.python.org/downloads/) (tick *Add python.exe to PATH* while installing it);
+PySide6 is installed for you if it's missing.
+
+Install for your user — double-click `windows\install.cmd`, or run:
 
 ```
-pip install pystray pillow
-python vr_autolauncher_tray.pyw
+powershell -ExecutionPolicy Bypass -File windows\install.ps1
 ```
 
-Standalone exe via [PyInstaller](https://pyinstaller.org/):
+It copies the program to `%LocalAppData%\VRAutoLauncher`, adds a Start Menu entry, turns on
+autostart and starts it. Options: `-NoAutostart`, `-NoStart`.
+`windows\uninstall.ps1` removes it again and keeps your settings.
+
+To run it without installing:
 
 ```
-pip install pyinstaller
-pyinstaller --onefile --windowed --name VRAutoLauncher vr_autolauncher_tray.pyw
+pip install pyside6
+pythonw vr_autolauncher_tray.pyw
 ```
 
-Installer via [NSIS](https://nsis.sourceforge.io/) (per-user install, no admin
-required, sets up a Startup shortcut and an uninstaller):
+Windows differences: "Start with the system" writes a small `.cmd` into the Startup folder,
+the application picker lists Start Menu shortcuts, and the two Linux-only session actions
+(keeping the screen awake, freezing processes) are greyed out.
 
-```
-makensis installer.nsi
-```
+A standalone exe plus a classic setup program — for machines without Python — is built with
+[PyInstaller](https://pyinstaller.org/) and [NSIS](https://nsis.sourceforge.io/); the exact
+commands are in the header of `installer.nsi`.
 
 Config and log live in `%LocalAppData%\VRAutoLauncher\`.
 
 ## Configuration
 
-Everything below can be changed in the settings window; the file is for Windows
-(no settings window there yet) or if you prefer editing JSON.
+Everything below can be changed in the settings window; the file is there if you
+prefer editing JSON.
 `config.json` is created with the defaults above on first run. Example:
 
 ```json

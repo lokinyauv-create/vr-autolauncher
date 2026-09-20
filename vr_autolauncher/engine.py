@@ -23,6 +23,7 @@ IDLE, PENDING, DONE = "idle", "pending", "done"
 
 KEEP_ALIVE_GRACE = 20   # seconds a fresh launch gets to show up as a process
 KEEP_ALIVE_MAX = 5      # restarts per trigger window, so a broken app can't loop forever
+FORCE_KILL_DELAY = 3    # seconds a force-closed app gets to obey SIGTERM before SIGKILL
 
 
 def _matches(proc, patterns):
@@ -37,6 +38,9 @@ class AppState:
         self.launched_at = 0.0
         self.restarts = 0
         self.popen = None
+        # Force-closed by the user: stay down (no launch, no keep-alive) until the
+        # trigger window ends or the user starts it again.
+        self.suppressed = False
 
 
 class Engine:
@@ -98,6 +102,16 @@ class Engine:
             return [(a["name"], a["enabled"], self.apps.get(a["name"], AppState()).phase)
                     for a in self.cfg["apps"]]
 
+    def app_states(self):
+        """[{name, enabled, phase, running}] in config order, for the tray and the window."""
+        with self._lock:
+            out = []
+            for a in self.cfg["apps"]:
+                st = self.apps.get(a["name"]) or AppState()
+                out.append({"name": a["name"], "enabled": a["enabled"], "phase": st.phase,
+                            "running": self._is_running(a, st)})
+            return out
+
     def snapshot(self):
         """Process names seen on the last scan and whether a VR session is up."""
         with self._lock:
@@ -131,12 +145,74 @@ class Engine:
         self._emit()
 
     def launch_now(self, name):
+        """Start an app right now. "launched"/"skipped"/"missing"/"failed", None if unknown."""
         with self._lock:
             app = self._app(name)
-            if app:
-                self._procs = osdeps.list_processes()
-                self._launch(app, self.apps.setdefault(name, AppState()), manual=True)
+            if app is None:
+                return None
+            st = self.apps.setdefault(name, AppState())
+            st.suppressed = False
+            self._procs = osdeps.list_processes()
+            result = self._launch(app, st, manual=True)
+            # Started by hand outside its trigger window: there is nothing to close it
+            # with later, and the next tick must not treat it as "trigger gone".
+            st.launched = st.launched and self._wanted(app)
+            self._next_scan = 0.0
         self._emit()
+        return result
+
+    def force_close(self, name):
+        """Kill an app now and keep it down until the VR session ends or it is started again.
+
+        SIGTERM at once, SIGKILL for whatever is still alive FORCE_KILL_DELAY seconds later.
+        Returns the number of processes signalled (0: nothing to close).
+        """
+        with self._lock:
+            app = self._app(name)
+            if app is None:
+                return 0
+            st = self.apps.setdefault(name, AppState())
+            self._procs = osdeps.list_processes()
+            pids = set()
+            if st.popen is not None and st.popen.poll() is None and not osdeps.IS_WINDOWS:
+                try:  # a session leader (see osdeps.spawn): take its whole group down
+                    os.killpg(st.popen.pid, signal.SIGTERM)
+                    pids.add(st.popen.pid)
+                except OSError:
+                    pass
+            for proc in self._procs:
+                if app["running"] and _matches(proc, app["running"]) and osdeps.terminate(proc.pid):
+                    pids.add(proc.pid)
+            st.suppressed, st.phase, st.launched, st.popen, st.restarts = True, DONE, False, None, 0
+            self._procs = [p for p in self._procs if p.pid not in pids]
+            self._next_scan = 0.0
+        if pids:
+            timer = threading.Timer(FORCE_KILL_DELAY, self._kill_leftovers, args=(name, pids))
+            timer.daemon = True
+            timer.start()
+            self._notify(t("app_force_closed", app=name))
+        else:
+            self._notify(t("app_nothing_to_close", app=name))
+        log.info("Force-closed %s (%d process(es)); stays down until the session ends or it is "
+                 "started again", name, len(pids))
+        self._emit()
+        return len(pids)
+
+    def toggle_running(self, name):
+        """The ✕ / ▶ button: force-close a running app, start a stopped one.
+
+        "closed", or launch_now()'s result; None if the app is not in the saved config.
+        """
+        with self._lock:
+            app = self._app(name)
+            if app is None:
+                return None
+            self._procs = osdeps.list_processes()
+            running = self._is_running(app, self.apps.setdefault(name, AppState()))
+        if running:
+            self.force_close(name)
+            return "closed"
+        return self.launch_now(name)
 
     def test_launch(self, raw_app):
         """Launch an app entry as currently edited (maybe unsaved) in the settings window.
@@ -179,6 +255,15 @@ class Engine:
     def _app(self, name):
         return next((a for a in self.cfg["apps"] if a["name"] == name), None)
 
+    def _kill_leftovers(self, name, pids):
+        for pid in pids:
+            if osdeps.pid_alive(pid) and osdeps.kill(pid):
+                log.warning("%s: pid %d ignored SIGTERM, killed", name, pid)
+
+    def _wanted(self, app):
+        check = any if app["trigger"] == "any" else all
+        return app["enabled"] and bool(app["when"]) and check(p in self._names_up for p in app["when"])
+
     def _tick(self):
         with self._lock:
             now = time.monotonic()
@@ -208,15 +293,16 @@ class Engine:
             if st.phase == PENDING:
                 st.phase = IDLE
             return
-        check = any if app["trigger"] == "any" else all
-        wanted = app["enabled"] and bool(app["when"]) and check(p in self._names_up for p in app["when"])
-
-        if not wanted:
+        if not self._wanted(app):
             if st.phase == DONE and st.launched and app["close_on_exit"]:
                 self._close(app, st)
             if st.phase != IDLE:
                 log.info("%s: conditions gone, reset", app["name"])
             st.phase, st.launched, st.popen, st.restarts = IDLE, False, None, 0
+            st.suppressed = False
+            return
+
+        if st.suppressed:
             return
 
         if st.phase == DONE and app["keep_alive"] and st.launched \

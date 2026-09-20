@@ -13,6 +13,10 @@ STEAM_ROOTS = [
     "~/.local/share/Steam",
     "~/.steam/steam",
     "~/.var/app/com.valvesoftware.Steam/.local/share/Steam",
+] if not osdeps.IS_WINDOWS else [
+    r"C:\Program Files (x86)\Steam",
+    r"C:\Program Files\Steam",
+    os.path.expandvars(r"%ProgramFiles(x86)%\Steam"),
 ]
 # Tools that show up as "games" in the Steam library.
 _STEAM_TOOLS = re.compile(r"^(Proton|Steam Linux Runtime|Steamworks Common|SteamVR Performance)", re.I)
@@ -80,6 +84,88 @@ def running_process_names():
     return sorted(n for n in names if not (len(n) == 15 and any(o != n and o.startswith(n) for o in names)))
 
 
+class DesktopApp:
+    def __init__(self, name, command, icon=None):
+        self.name = name
+        self.command = command
+        self.icon = icon  # icon name/path (Linux) or the .lnk path (Windows)
+
+
+def installed_apps():
+    """Applications from the system menu, for the "pick an application" dialog."""
+    return _installed_apps_windows() if osdeps.IS_WINDOWS else _installed_apps_linux()
+
+
+def _installed_apps_linux():
+    dirs = [os.path.join(d, "applications") for d in
+            [os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")]
+            + (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")]
+    lang = (os.environ.get("LC_ALL") or os.environ.get("LANG") or "")[:2]
+    apps = {}
+    for directory in dirs:
+        try:
+            entries = sorted(os.listdir(directory))
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.endswith(".desktop") or entry in apps:
+                continue
+            app = _parse_desktop_file(os.path.join(directory, entry), lang)
+            if app:
+                apps[entry] = app
+    return sorted(apps.values(), key=lambda a: a.name.lower())
+
+
+def _parse_desktop_file(path, lang):
+    name = localized = exec_line = icon = ""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            in_entry = False
+            for line in f:
+                line = line.strip()
+                if line.startswith("["):
+                    if in_entry:
+                        break  # only the first [Desktop Entry] section
+                    in_entry = line == "[Desktop Entry]"
+                    continue
+                if not in_entry or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key == "Name":
+                    name = value
+                elif lang and key == "Name[%s]" % lang:
+                    localized = value
+                elif key == "Exec":
+                    exec_line = value
+                elif key == "Icon":
+                    icon = value
+                elif key in ("NoDisplay", "Hidden") and value.strip().lower() == "true":
+                    return None
+                elif key == "Type" and value.strip() != "Application":
+                    return None
+    except OSError:
+        return None
+    if not exec_line:
+        return None
+    return DesktopApp(localized or name or os.path.basename(path), clean_exec(exec_line), icon)
+
+
+def _installed_apps_windows():
+    menus = [os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs"),
+             os.path.expandvars(r"%ProgramData%\Microsoft\Windows\Start Menu\Programs")]
+    apps = {}
+    for menu in menus:
+        for root, _dirs, files in os.walk(menu):
+            for filename in files:
+                if not filename.lower().endswith(".lnk"):
+                    continue
+                name = os.path.splitext(filename)[0]
+                path = os.path.join(root, filename)
+                # Shortcuts are launched as-is; osdeps.spawn hands .lnk to the shell.
+                apps.setdefault(name, DesktopApp(name, '"%s"' % path, path))
+    return sorted(apps.values(), key=lambda a: a.name.lower())
+
+
 _EXEC_FIELD_CODES = re.compile(r"\s%[fFuUdDnNickvm]")
 
 
@@ -114,9 +200,12 @@ def suggest_running(command):
     return re.split(r"[-_ ]v?\d", name, maxsplit=1)[0]
 
 
-# --- Autostart (Linux: XDG autostart entry) -------------------------------------
+# --- Autostart (XDG autostart entry / Windows Startup folder) --------------------
 
 def autostart_file():
+    if osdeps.IS_WINDOWS:
+        return os.path.expandvars(
+            r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\VR Auto Launcher.cmd")
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     return os.path.join(base, "autostart", APP_ID + ".desktop")
 
@@ -143,6 +232,12 @@ def set_autostart(enabled):
             os.remove(path)
         return
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    if osdeps.IS_WINDOWS:
+        # pythonw.exe keeps it windowless; "start" lets the shell exit immediately.
+        runner = sys.executable.replace("python.exe", "pythonw.exe")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('@echo off\r\nstart "" "%s" -m vr_autolauncher --background\r\n' % runner)
+        return
     with open(path, "w", encoding="utf-8") as f:
         f.write("[Desktop Entry]\n"
                 "Type=Application\n"
