@@ -21,22 +21,13 @@ for arg in "$@"; do
     esac
 done
 
-# Dependencies come from the distro, not pip.
-missing=()
-python3 -c 'import gi; gi.require_version("Gtk", "3.0")' 2>/dev/null || missing+=(gobject)
-python3 -c '
-import gi
-for ns in ("AyatanaAppIndicator3", "AppIndicator3"):
-    try:
-        gi.require_version(ns, "0.1"); break
-    except ValueError: pass
-else: raise SystemExit(1)' 2>/dev/null || missing+=(appindicator)
-python3 -c 'import PIL' 2>/dev/null || missing+=(pillow)
-if [ ${#missing[@]} -gt 0 ]; then
-    echo "Missing: ${missing[*]}. Install them first, e.g.:"
-    echo "  Fedora:        sudo dnf install python3-gobject libappindicator-gtk3 python3-pillow"
-    echo "  Debian/Ubuntu: sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1 python3-pil"
-    echo "  Arch:          sudo pacman -S python-gobject libayatana-appindicator python-pillow"
+# The interface needs Qt (PySide6); everything else is standard Python.
+if ! python3 -c 'import PySide6.QtWidgets' 2>/dev/null; then
+    echo "PySide6 is missing. Install it first, e.g.:"
+    echo "  Fedora:        sudo dnf install python3-pyside6"
+    echo "  Debian/Ubuntu: sudo apt install python3-pyside6"
+    echo "  Arch:          sudo pacman -S pyside6"
+    echo "  any distro:    pip install --user pyside6"
     exit 1
 fi
 

@@ -61,10 +61,13 @@ LINUX_DEFAULTS = {
         },
         {
             "name": "WayVR",
-            "when": ["vrserver"],
-            "delay": 8,
+            # vrcompositor appears once SteamVR is really up: starting earlier makes
+            # WayVR fail with "Will not use OpenVR: Context init failed".
+            "when": ["vrcompositor"],
+            "delay": 15,
             "command": "~/Applications/WayVR-*.AppImage --openvr --show --replace",
             "running": ["wayvr"],
+            "keep_alive": True,
         },
         {
             "name": "VRCX",

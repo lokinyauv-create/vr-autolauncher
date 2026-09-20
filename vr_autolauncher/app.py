@@ -48,20 +48,17 @@ def print_status(config_path):
         print("  running: %s" % ("yes" if running else "no"))
 
 
-def pick_tray(engine, headless):
+def build_ui(engine, headless):
+    """Qt tray + settings window, or None to just watch in the background."""
     if headless:
         return None
-    if osdeps.IS_LINUX:
-        try:
-            from vr_autolauncher.tray_linux import LinuxTray
-            return LinuxTray(engine, LOG_FILE)
-        except (ImportError, ValueError) as e:
-            logging.warning("AppIndicator tray unavailable (%s), trying pystray", e)
     try:
-        from vr_autolauncher.tray_pystray import PystrayTray
-        return PystrayTray(engine, LOG_FILE)
+        from vr_autolauncher.qt_ui import QtUI
+        return QtUI(engine, LOG_FILE)
     except Exception as e:
-        logging.warning("No tray available (%s), running headless", e)
+        logging.warning("No graphical interface (%s), running headless. "
+                        "Install PySide6 (Fedora: sudo dnf install python3-pyside6, "
+                        "Windows: pip install pyside6).", e)
         return None
 
 
@@ -84,17 +81,15 @@ def main(argv=None):
     if not osdeps.acquire_single_instance():
         print(t("already_running"), file=sys.stderr)
         if not args.background:
-            osdeps.signal_running_instance()
+            osdeps.request_show()
         sys.exit(0)
-    if hasattr(signal, "SIGUSR1"):
-        # Until the tray installs its handler, a "show settings" ping must not kill us.
-        signal.signal(signal.SIGUSR1, signal.SIG_IGN)
     setup_logging(args.verbose)
     logging.info("%s %s started (pid %d)", APP_NAME, __version__, os.getpid())
 
     engine = Engine(args.config)
-    tray = pick_tray(engine, args.headless)
-    if tray is None:
+    osdeps.take_show_request()  # drop a stale request from a previous run
+    ui = build_ui(engine, args.headless)
+    if ui is None:
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda *_: engine.stop())
         engine.run()
@@ -102,10 +97,10 @@ def main(argv=None):
 
     worker = threading.Thread(target=engine.run, name="engine")
     worker.start()
-    if not args.background and hasattr(tray, "open_settings"):
-        tray.open_settings()
+    if not args.background:
+        ui.open_settings()
     try:
-        tray.run()
+        ui.run()
     finally:
         engine.stop()
         worker.join(10)

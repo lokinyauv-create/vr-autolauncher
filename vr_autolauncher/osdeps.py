@@ -96,15 +96,26 @@ def acquire_single_instance():
     return True
 
 
-def signal_running_instance():
-    """Ask the already-running copy to open its settings window (Linux: SIGUSR1)."""
-    if IS_WINDOWS:
-        return False
+def _show_request_file():
+    return os.path.join(runtime_dir(), "show-settings")
+
+
+def request_show():
+    """Ask the already-running copy to open its settings window."""
     try:
-        with open(os.path.join(runtime_dir(), "instance.lock")) as f:
-            os.kill(int(f.read().strip()), signal.SIGUSR1)
+        with open(_show_request_file(), "w") as f:
+            f.write("1")
         return True
-    except (OSError, ValueError):
+    except OSError:
+        return False
+
+
+def take_show_request():
+    """True once after request_show(); the running instance polls this."""
+    try:
+        os.remove(_show_request_file())
+        return True
+    except OSError:
         return False
 
 
@@ -205,6 +216,35 @@ def terminate(pid):
             os.kill(pid, signal.SIGTERM)
         return True
     except Exception:
+        return False
+
+
+def kill(pid):
+    """Force-kill: unlike terminate() the program gets no chance to ignore or clean up."""
+    try:
+        if IS_WINDOWS:
+            subprocess.call(["taskkill", "/f", "/pid", str(pid)], creationflags=_NO_WINDOW,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            os.kill(pid, signal.SIGKILL)
+        return True
+    except Exception:
+        return False
+
+
+def pid_alive(pid):
+    """True while the process exists (a zombie that only waits to be reaped counts as gone)."""
+    if IS_WINDOWS:
+        try:
+            out = subprocess.run(["tasklist", "/fi", "PID eq %d" % pid, "/nh"], capture_output=True,
+                                 creationflags=_NO_WINDOW).stdout
+        except OSError:
+            return False
+        return str(pid) in out.decode("utf-8", "replace")
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as f:
+            return f.read().rsplit(b")", 1)[1].split()[0] != b"Z"
+    except (OSError, IndexError):
         return False
 
 
