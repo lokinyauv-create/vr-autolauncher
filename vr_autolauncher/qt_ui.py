@@ -6,6 +6,7 @@ One implementation for Linux and Windows, so both look and behave the same.
 
 import copy
 import html
+import logging
 import os
 import shlex
 import stat
@@ -447,10 +448,15 @@ class SettingsWindow(QWidget):
         form.addRow(t("f_env"), self.f_env)
 
         self.f_close = QCheckBox(t("f_close_on_exit"))
-        self.f_close.toggled.connect(lambda _: self._on_field("close_on_exit"))
+        self.f_close.toggled.connect(self._on_close_toggled)
+        self.f_close_delay = QSpinBox(maximum=3600, suffix=" " + t("seconds_short"))
+        self.f_close_delay.valueChanged.connect(lambda _: self._on_field("close_delay"))
+        self.close_delay_label = _dim(QLabel(t("close_delay_label")))
         self.f_keep = QCheckBox(t("f_keep_alive"))
         self.f_keep.toggled.connect(lambda _: self._on_field("keep_alive"))
-        form.addRow("", _column(self.f_close, self.f_keep))
+        form.addRow("", _column(self.f_close,
+                                _row(self.close_delay_label, self.f_close_delay, None),
+                                self.f_keep))
 
         test = QPushButton(t("test_launch"))
         test.clicked.connect(self._test_launch)
@@ -553,6 +559,8 @@ class SettingsWindow(QWidget):
         self.f_running.setText(", ".join(app.get("running", [])))
         self.f_env.setText(_env_to_text(app.get("env")))
         self.f_close.setChecked(bool(app.get("close_on_exit")))
+        self.f_close_delay.setValue(int(float(app.get("close_delay", 0))))
+        self._update_close_delay_enabled()
         self.f_keep.setChecked(bool(app.get("keep_alive")))
         self.test_result.setText("")
         self._loading = False
@@ -583,8 +591,20 @@ class SettingsWindow(QWidget):
             app["env"] = _text_to_env(self.f_env.text())
         elif key in ("close_on_exit", "keep_alive"):
             app[key] = (self.f_close if key == "close_on_exit" else self.f_keep).isChecked()
+        elif key == "close_delay":
+            app["close_delay"] = self.f_close_delay.value()
         self._refresh_row(self._index)
         self._set_dirty()
+
+    def _on_close_toggled(self, _checked):
+        self._update_close_delay_enabled()
+        self._on_field("close_on_exit")
+
+    def _update_close_delay_enabled(self):
+        """The exit delay only means something when we close the program at all."""
+        on = self.f_close.isChecked()
+        self.f_close_delay.setEnabled(on)
+        self.close_delay_label.setEnabled(on)
 
     def _on_trigger_preset(self, _index):
         app = self.app
@@ -935,8 +955,6 @@ class QtUI:
         self.app.setQuitOnLastWindowClosed(False)
         QGuiApplication.setDesktopFileName(APP_ID)
 
-        if not QSystemTrayIcon.isSystemTrayAvailable():
-            raise RuntimeError("no system tray")
         self.window = None
         self._shown = None
         self._apps_shown = None
@@ -947,6 +965,12 @@ class QtUI:
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
         self._build_menu()
+        # Right after login the panel (on GNOME: the AppIndicator extension) may not be
+        # up yet. Don't give up then - _tick() shows the icon as soon as it appears, and
+        # the settings window works without it in the meantime.
+        self._tray_ready = QSystemTrayIcon.isSystemTrayAvailable()
+        if not self._tray_ready:
+            logging.warning("System tray not available yet; will show the icon once it is")
 
         self.timer = QTimer()
         self.timer.timeout.connect(self._tick)
@@ -1013,6 +1037,11 @@ class QtUI:
     # --- polling ------------------------------------------------------------------
 
     def _tick(self):
+        if not self._tray_ready and QSystemTrayIcon.isSystemTrayAvailable():
+            self._tray_ready = True
+            self.tray.hide()
+            self.tray.show()  # register again, now that there is someone to register with
+            logging.info("System tray appeared, icon shown")
         if osdeps.take_show_request():
             self.open_settings()
         state, text = self.engine.status()

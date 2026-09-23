@@ -38,6 +38,7 @@ class AppState:
         self.launched_at = 0.0
         self.restarts = 0
         self.popen = None
+        self.close_deadline = 0.0   # set while waiting out close_delay
         # Force-closed by the user: stay down (no launch, no keep-alive) until the
         # trigger window ends or the user starts it again.
         self.suppressed = False
@@ -161,10 +162,28 @@ class Engine:
         self._emit()
         return result
 
+    def _terminate_now(self, app, st):
+        """SIGTERM our own child (if any) plus anything matching "running" - even a copy
+        we never started ourselves, e.g. a program SteamVR autolaunches on its own.
+        Returns the set of pids signalled.
+        """
+        pids = set()
+        if st.popen is not None and st.popen.poll() is None and not osdeps.IS_WINDOWS:
+            try:  # a session leader (see osdeps.spawn): take its whole group down
+                os.killpg(st.popen.pid, signal.SIGTERM)
+                pids.add(st.popen.pid)
+            except OSError:
+                pass
+        for proc in self._procs:
+            if app["running"] and _matches(proc, app["running"]) and osdeps.terminate(proc.pid):
+                pids.add(proc.pid)
+        return pids
+
     def force_close(self, name):
         """Kill an app now and keep it down until the VR session ends or it is started again.
 
-        SIGTERM at once, SIGKILL for whatever is still alive FORCE_KILL_DELAY seconds later.
+        SIGTERM at once, SIGKILL for whatever is still alive FORCE_KILL_DELAY seconds later
+        (some programs, e.g. ones with no window left to close, ignore SIGTERM outright).
         Returns the number of processes signalled (0: nothing to close).
         """
         with self._lock:
@@ -173,16 +192,7 @@ class Engine:
                 return 0
             st = self.apps.setdefault(name, AppState())
             self._procs = osdeps.list_processes()
-            pids = set()
-            if st.popen is not None and st.popen.poll() is None and not osdeps.IS_WINDOWS:
-                try:  # a session leader (see osdeps.spawn): take its whole group down
-                    os.killpg(st.popen.pid, signal.SIGTERM)
-                    pids.add(st.popen.pid)
-                except OSError:
-                    pass
-            for proc in self._procs:
-                if app["running"] and _matches(proc, app["running"]) and osdeps.terminate(proc.pid):
-                    pids.add(proc.pid)
+            pids = self._terminate_now(app, st)
             st.suppressed, st.phase, st.launched, st.popen, st.restarts = True, DONE, False, None, 0
             self._procs = [p for p in self._procs if p.pid not in pids]
             self._next_scan = 0.0
@@ -294,14 +304,24 @@ class Engine:
                 st.phase = IDLE
             return
         if not self._wanted(app):
-            if st.phase == DONE and st.launched and app["close_on_exit"]:
+            if st.phase == DONE and app["close_on_exit"] and (st.launched or self._is_running(app, st)):
+                if app["close_delay"]:
+                    if not st.close_deadline:
+                        st.close_deadline = now + app["close_delay"]
+                        log.info("%s: conditions gone, closing in %ss",
+                                 app["name"], app["close_delay"])
+                    if now < st.close_deadline:
+                        return  # keep the state so we still know what to close
                 self._close(app, st)
             if st.phase != IDLE:
                 log.info("%s: conditions gone, reset", app["name"])
             st.phase, st.launched, st.popen, st.restarts = IDLE, False, None, 0
-            st.suppressed = False
+            st.suppressed, st.close_deadline = False, 0.0
             return
 
+        if st.close_deadline:  # trigger came back during the wait
+            log.info("%s: conditions are back, not closing", app["name"])
+            st.close_deadline = 0.0
         if st.suppressed:
             return
 
@@ -362,20 +382,15 @@ class Engine:
         return "launched"
 
     def _close(self, app, st):
-        closed = False
-        if st.popen is not None and st.popen.poll() is None and not osdeps.IS_WINDOWS:
-            try:
-                os.killpg(st.popen.pid, signal.SIGTERM)
-                closed = True
-            except OSError:
-                pass
-        if app["running"]:
-            for proc in osdeps.list_processes():
-                if _matches(proc, app["running"]):
-                    closed = osdeps.terminate(proc.pid) or closed
-        if closed:
-            log.info("Closed %s", app["name"])
+        """Same termination as force_close (SIGTERM now, SIGKILL later if needed), used
+        when close_on_exit fires automatically instead of the user clicking a button."""
+        pids = self._terminate_now(app, st)
+        if pids:
+            log.info("Closing %s (%d process(es))", app["name"], len(pids))
             self._notify(t("app_closed", app=app["name"]))
+            timer = threading.Timer(FORCE_KILL_DELAY, self._kill_leftovers, args=(app["name"], pids))
+            timer.daemon = True
+            timer.start()
 
     def _update_session(self):
         session = self.cfg["session"]

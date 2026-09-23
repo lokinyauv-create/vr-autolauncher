@@ -31,6 +31,8 @@ APP_DEFAULTS = {
     "running": [],
     # Close the app again when the "when" processes go away.
     "close_on_exit": False,
+    # ...after waiting this many seconds (0: at once).
+    "close_delay": 0,
     # Start it again if it exits/crashes while the trigger is still up.
     "keep_alive": False,
     # Extra environment variables for the launched program.
@@ -142,6 +144,7 @@ def normalize_app(raw):
     app["running"] = [s.strip().lower() for s in app["running"] if s.strip()]
     app["trigger"] = "any" if app["trigger"] == "any" else "all"
     app["delay"] = max(0.0, float(app["delay"]))
+    app["close_delay"] = max(0.0, float(app["close_delay"]))
     app["env"] = {str(k): str(v) for k, v in dict(app["env"] or {}).items()}
     return app
 
