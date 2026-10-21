@@ -144,7 +144,8 @@ def installed_version(entry):
         text = open(path).read()
     except OSError:
         return ""
-    m = re.search(r'VERSION\s*=\s*"([^"]+)"', text) or re.search(r"(\d+(?:\.\d+)+)", text)
+    # keep a suffix such as "-lokinya.1", or "1.1" would look older than "v1.1-lokinya.1"
+    m = re.search(r'VERSION\s*=\s*"([^"]+)"', text) or re.search(r"(\d+(?:\.\d+)+(?:-[\w.]+)?)", text)
     return m.group(1) if m else "?"
 
 
