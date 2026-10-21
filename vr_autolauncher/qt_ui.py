@@ -20,9 +20,9 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QStackedWidget, QSystemTrayIcon, QTabWidget, QToolButton,
                                QVBoxLayout, QWidget)
 
-from vr_autolauncher import APP_ID, APP_NAME, config, discovery, osdeps
+from vr_autolauncher import APP_ID, APP_NAME, catalog, config, discovery, osdeps
 from vr_autolauncher.engine import (DONE, PENDING, ST_ACTIVE, ST_CLOSED, ST_DETECTED, ST_WAITING)
-from vr_autolauncher.i18n import t
+from vr_autolauncher.i18n import LANG, t
 
 ICON_STYLE = {
     ST_WAITING: ("#4a90d9", "VR"),
@@ -251,6 +251,7 @@ class SettingsWindow(QWidget):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_apps_tab(), t("tab_apps"))
         self.tabs.addTab(self._build_general_tab(), t("tab_general"))
+        self.tabs.addTab(MyAppsTab(), t("tab_myapps"))
 
         self.status_label = _dim(QLabel(""))
         self.toast = QLabel("")
@@ -945,6 +946,102 @@ class SettingsWindow(QWidget):
 
 
 # --- Tray + application -------------------------------------------------------------
+
+
+# --- "My programs" tab: Lokinya's other VR programs ---------------------------------
+
+class MyAppsTab(QWidget):
+    """Install / update the author's other VR programs from their GitHub releases."""
+
+    def __init__(self):
+        super().__init__()
+        self._latest = {}   # id -> (tag, asset_url) or Exception
+        self._busy = None   # QProcess of a running install
+        layout = QVBoxLayout(self)
+        layout.addWidget(_hint(t("myapps_intro")))
+        self.rows = {}
+        for entry in catalog.CATALOG:
+            name = QLabel("<b>%s</b>" % html.escape(entry["name"][LANG]))
+            about = _hint(entry["about"][LANG])
+            status = _dim(QLabel(""))
+            link = QLabel('<a href="https://github.com/%s">GitHub</a>' % entry["repo"])
+            link.setOpenExternalLinks(True)
+            button = QPushButton()
+            button.clicked.connect(lambda _=False, e=entry: self._install(e))
+            layout.addWidget(_row((_column(name, about, status), 1), link, button))
+            self.rows[entry["id"]] = (status, button)
+        layout.addStretch(1)
+        self.log = _hint("")
+        layout.addWidget(self.log)
+        refresh = QPushButton(t("myapps_check"))
+        refresh.clicked.connect(self.check)
+        author = QLabel(t("myapps_author", url=catalog.AUTHOR_URL))
+        author.setOpenExternalLinks(True)
+        layout.addWidget(_row(author, None, refresh))
+        self._refresh_rows()
+        QTimer.singleShot(500, self.check)
+
+    def check(self):
+        import threading
+
+        def work():
+            for entry in catalog.CATALOG:
+                try:
+                    self._latest[entry["id"]] = catalog.latest_release(entry)
+                except Exception as e:  # offline / rate limit: show it on the row
+                    self._latest[entry["id"]] = e
+        self._latest = {}
+        threading.Thread(target=work, daemon=True).start()
+        self._poll = QTimer(self)
+        self._poll.timeout.connect(self._refresh_rows)
+        self._poll.start(300)
+
+    def _refresh_rows(self):
+        for entry in catalog.CATALOG:
+            status, button = self.rows[entry["id"]]
+            have = catalog.installed_version(entry)
+            latest = self._latest.get(entry["id"])
+            tag = latest[0] if isinstance(latest, tuple) else ""
+            if isinstance(latest, Exception):
+                status.setText(t("myapps_offline"))
+            elif latest is None:
+                status.setText(t("myapps_checking"))
+            else:
+                status.setText(t("myapps_versions", have=have or "—", latest=tag or "—"))
+            if have and not catalog.is_newer(tag.lstrip("v"), have.lstrip("v")):
+                button.setText(t("myapps_installed"))
+                button.setEnabled(False)
+            else:
+                button.setText(t("myapps_update") if have else t("myapps_install"))
+                button.setEnabled(bool(tag) and self._busy is None)
+        if len(self._latest) == len(catalog.CATALOG) and getattr(self, "_poll", None):
+            self._poll.stop()
+
+    def _install(self, entry):
+        from PySide6.QtCore import QProcess
+        tag, url = self._latest[entry["id"]]
+        if entry["kind"] == "appimage" and not url:
+            self.log.setText(t("myapps_failed", name=entry["name"][LANG]))
+            return
+        self._busy = QProcess(self)
+        self._busy.setProcessChannelMode(QProcess.MergedChannels)
+        self._busy.readyReadStandardOutput.connect(self._show_progress)
+        self._busy.finished.connect(lambda code, _status, e=entry: self._done(e, code))
+        self.log.setText(t("myapps_installing", name=entry["name"][LANG]))
+        self._busy.start("bash", ["-c", catalog.install_command(entry, tag, url)])
+        self._refresh_rows()
+
+    def _show_progress(self):
+        lines = bytes(self._busy.readAllStandardOutput()).decode(errors="replace").strip().splitlines()
+        if lines:
+            self.log.setText(lines[-1])
+
+    def _done(self, entry, code):
+        self._busy = None
+        key = "myapps_done" if code == 0 else "myapps_failed"
+        self.log.setText(t(key, name=entry["name"][LANG]))
+        self._refresh_rows()
+
 
 class QtUI:
     def __init__(self, engine, log_file):

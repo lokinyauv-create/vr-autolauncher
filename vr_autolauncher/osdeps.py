@@ -380,7 +380,11 @@ class IdleInhibitor:
     def start(self, reason):
         if IS_WINDOWS or self._proc is not None:
             return False
-        if shutil.which("gnome-session-inhibit") and os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        desktops = os.environ.get("XDG_CURRENT_DESKTOP", "").upper().split(":")
+        if "KDE" in desktops and shutil.which("kde-inhibit"):
+            # gnome-session-inhibit needs org.gnome.SessionManager, which Plasma doesn't have
+            argv = ["kde-inhibit", "--power", "--screenSaver", "sleep", "infinity"]
+        elif shutil.which("gnome-session-inhibit") and os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
             argv = ["gnome-session-inhibit", "--app-id", APP_ID, "--reason", reason,
                     "--inhibit", "idle:suspend", "--inhibit-only"]
         elif shutil.which("systemd-inhibit"):
