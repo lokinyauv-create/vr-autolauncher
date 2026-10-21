@@ -54,11 +54,15 @@ def build_ui(engine, headless):
         return None
     try:
         from vr_autolauncher.qt_ui import QtUI
+    except ImportError as e:
+        logging.warning("PySide6 is not installed (%s), running without a window. "
+                        "Install it: Fedora: sudo dnf install python3-pyside6, "
+                        "Windows: pip install pyside6", e)
+        return None
+    try:
         return QtUI(engine, LOG_FILE)
-    except Exception as e:
-        logging.warning("No graphical interface (%s), running headless. "
-                        "Install PySide6 (Fedora: sudo dnf install python3-pyside6, "
-                        "Windows: pip install pyside6).", e)
+    except Exception:
+        logging.exception("Could not start the graphical interface, running without a window")
         return None
 
 

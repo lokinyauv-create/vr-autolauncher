@@ -6,6 +6,7 @@ One implementation for Linux and Windows, so both look and behave the same.
 
 import copy
 import html
+import logging
 import os
 import shlex
 import stat
@@ -19,9 +20,9 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QStackedWidget, QSystemTrayIcon, QTabWidget, QToolButton,
                                QVBoxLayout, QWidget)
 
-from vr_autolauncher import APP_ID, APP_NAME, config, discovery, osdeps
+from vr_autolauncher import APP_ID, APP_NAME, catalog, config, discovery, osdeps
 from vr_autolauncher.engine import (DONE, PENDING, ST_ACTIVE, ST_CLOSED, ST_DETECTED, ST_WAITING)
-from vr_autolauncher.i18n import t
+from vr_autolauncher.i18n import LANG, t
 
 ICON_STYLE = {
     ST_WAITING: ("#4a90d9", "VR"),
@@ -250,6 +251,7 @@ class SettingsWindow(QWidget):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_apps_tab(), t("tab_apps"))
         self.tabs.addTab(self._build_general_tab(), t("tab_general"))
+        self.tabs.addTab(MyAppsTab(), t("tab_myapps"))
 
         self.status_label = _dim(QLabel(""))
         self.toast = QLabel("")
@@ -447,10 +449,15 @@ class SettingsWindow(QWidget):
         form.addRow(t("f_env"), self.f_env)
 
         self.f_close = QCheckBox(t("f_close_on_exit"))
-        self.f_close.toggled.connect(lambda _: self._on_field("close_on_exit"))
+        self.f_close.toggled.connect(self._on_close_toggled)
+        self.f_close_delay = QSpinBox(maximum=3600, suffix=" " + t("seconds_short"))
+        self.f_close_delay.valueChanged.connect(lambda _: self._on_field("close_delay"))
+        self.close_delay_label = _dim(QLabel(t("close_delay_label")))
         self.f_keep = QCheckBox(t("f_keep_alive"))
         self.f_keep.toggled.connect(lambda _: self._on_field("keep_alive"))
-        form.addRow("", _column(self.f_close, self.f_keep))
+        form.addRow("", _column(self.f_close,
+                                _row(self.close_delay_label, self.f_close_delay, None),
+                                self.f_keep))
 
         test = QPushButton(t("test_launch"))
         test.clicked.connect(self._test_launch)
@@ -553,6 +560,8 @@ class SettingsWindow(QWidget):
         self.f_running.setText(", ".join(app.get("running", [])))
         self.f_env.setText(_env_to_text(app.get("env")))
         self.f_close.setChecked(bool(app.get("close_on_exit")))
+        self.f_close_delay.setValue(int(float(app.get("close_delay", 0))))
+        self._update_close_delay_enabled()
         self.f_keep.setChecked(bool(app.get("keep_alive")))
         self.test_result.setText("")
         self._loading = False
@@ -583,8 +592,20 @@ class SettingsWindow(QWidget):
             app["env"] = _text_to_env(self.f_env.text())
         elif key in ("close_on_exit", "keep_alive"):
             app[key] = (self.f_close if key == "close_on_exit" else self.f_keep).isChecked()
+        elif key == "close_delay":
+            app["close_delay"] = self.f_close_delay.value()
         self._refresh_row(self._index)
         self._set_dirty()
+
+    def _on_close_toggled(self, _checked):
+        self._update_close_delay_enabled()
+        self._on_field("close_on_exit")
+
+    def _update_close_delay_enabled(self):
+        """The exit delay only means something when we close the program at all."""
+        on = self.f_close.isChecked()
+        self.f_close_delay.setEnabled(on)
+        self.close_delay_label.setEnabled(on)
 
     def _on_trigger_preset(self, _index):
         app = self.app
@@ -926,6 +947,102 @@ class SettingsWindow(QWidget):
 
 # --- Tray + application -------------------------------------------------------------
 
+
+# --- "My programs" tab: Lokinya's other VR programs ---------------------------------
+
+class MyAppsTab(QWidget):
+    """Install / update the author's other VR programs from their GitHub releases."""
+
+    def __init__(self):
+        super().__init__()
+        self._latest = {}   # id -> (tag, asset_url) or Exception
+        self._busy = None   # QProcess of a running install
+        layout = QVBoxLayout(self)
+        layout.addWidget(_hint(t("myapps_intro")))
+        self.rows = {}
+        for entry in catalog.CATALOG:
+            name = QLabel("<b>%s</b>" % html.escape(entry["name"][LANG]))
+            about = _hint(entry["about"][LANG])
+            status = _dim(QLabel(""))
+            link = QLabel('<a href="https://github.com/%s">GitHub</a>' % entry["repo"])
+            link.setOpenExternalLinks(True)
+            button = QPushButton()
+            button.clicked.connect(lambda _=False, e=entry: self._install(e))
+            layout.addWidget(_row((_column(name, about, status), 1), link, button))
+            self.rows[entry["id"]] = (status, button)
+        layout.addStretch(1)
+        self.log = _hint("")
+        layout.addWidget(self.log)
+        refresh = QPushButton(t("myapps_check"))
+        refresh.clicked.connect(self.check)
+        author = QLabel(t("myapps_author", url=catalog.AUTHOR_URL))
+        author.setOpenExternalLinks(True)
+        layout.addWidget(_row(author, None, refresh))
+        self._refresh_rows()
+        QTimer.singleShot(500, self.check)
+
+    def check(self):
+        import threading
+
+        def work():
+            for entry in catalog.CATALOG:
+                try:
+                    self._latest[entry["id"]] = catalog.latest_release(entry)
+                except Exception as e:  # offline / rate limit: show it on the row
+                    self._latest[entry["id"]] = e
+        self._latest = {}
+        threading.Thread(target=work, daemon=True).start()
+        self._poll = QTimer(self)
+        self._poll.timeout.connect(self._refresh_rows)
+        self._poll.start(300)
+
+    def _refresh_rows(self):
+        for entry in catalog.CATALOG:
+            status, button = self.rows[entry["id"]]
+            have = catalog.installed_version(entry)
+            latest = self._latest.get(entry["id"])
+            tag = latest[0] if isinstance(latest, tuple) else ""
+            if isinstance(latest, Exception):
+                status.setText(t("myapps_offline"))
+            elif latest is None:
+                status.setText(t("myapps_checking"))
+            else:
+                status.setText(t("myapps_versions", have=have or "—", latest=tag or "—"))
+            if have and not catalog.is_newer(tag.lstrip("v"), have.lstrip("v")):
+                button.setText(t("myapps_installed"))
+                button.setEnabled(False)
+            else:
+                button.setText(t("myapps_update") if have else t("myapps_install"))
+                button.setEnabled(bool(tag) and self._busy is None)
+        if len(self._latest) == len(catalog.CATALOG) and getattr(self, "_poll", None):
+            self._poll.stop()
+
+    def _install(self, entry):
+        from PySide6.QtCore import QProcess
+        tag, url = self._latest[entry["id"]]
+        if entry["kind"] == "appimage" and not url:
+            self.log.setText(t("myapps_failed", name=entry["name"][LANG]))
+            return
+        self._busy = QProcess(self)
+        self._busy.setProcessChannelMode(QProcess.MergedChannels)
+        self._busy.readyReadStandardOutput.connect(self._show_progress)
+        self._busy.finished.connect(lambda code, _status, e=entry: self._done(e, code))
+        self.log.setText(t("myapps_installing", name=entry["name"][LANG]))
+        self._busy.start("bash", ["-c", catalog.install_command(entry, tag, url)])
+        self._refresh_rows()
+
+    def _show_progress(self):
+        lines = bytes(self._busy.readAllStandardOutput()).decode(errors="replace").strip().splitlines()
+        if lines:
+            self.log.setText(lines[-1])
+
+    def _done(self, entry, code):
+        self._busy = None
+        key = "myapps_done" if code == 0 else "myapps_failed"
+        self.log.setText(t(key, name=entry["name"][LANG]))
+        self._refresh_rows()
+
+
 class QtUI:
     def __init__(self, engine, log_file):
         self.engine = engine
@@ -935,8 +1052,6 @@ class QtUI:
         self.app.setQuitOnLastWindowClosed(False)
         QGuiApplication.setDesktopFileName(APP_ID)
 
-        if not QSystemTrayIcon.isSystemTrayAvailable():
-            raise RuntimeError("no system tray")
         self.window = None
         self._shown = None
         self._apps_shown = None
@@ -947,6 +1062,12 @@ class QtUI:
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
         self._build_menu()
+        # Right after login the panel (on GNOME: the AppIndicator extension) may not be
+        # up yet. Don't give up then - _tick() shows the icon as soon as it appears, and
+        # the settings window works without it in the meantime.
+        self._tray_ready = QSystemTrayIcon.isSystemTrayAvailable()
+        if not self._tray_ready:
+            logging.warning("System tray not available yet; will show the icon once it is")
 
         self.timer = QTimer()
         self.timer.timeout.connect(self._tick)
@@ -1013,6 +1134,11 @@ class QtUI:
     # --- polling ------------------------------------------------------------------
 
     def _tick(self):
+        if not self._tray_ready and QSystemTrayIcon.isSystemTrayAvailable():
+            self._tray_ready = True
+            self.tray.hide()
+            self.tray.show()  # register again, now that there is someone to register with
+            logging.info("System tray appeared, icon shown")
         if osdeps.take_show_request():
             self.open_settings()
         state, text = self.engine.status()
