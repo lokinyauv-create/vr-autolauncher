@@ -16,7 +16,7 @@ from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QIcon, QPaint
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
                                QFileDialog, QFileIconProvider, QFormLayout, QFrame, QHBoxLayout,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox,
-                               QPlainTextEdit, QPushButton, QRadioButton, QSpinBox, QSplitter,
+                               QPlainTextEdit, QPushButton, QRadioButton, QScrollArea, QSpinBox, QSplitter,
                                QStackedWidget, QSystemTrayIcon, QTabWidget, QToolButton,
                                QVBoxLayout, QWidget)
 
@@ -97,8 +97,18 @@ def _text_to_env(text):
     return env
 
 
+def _dim_color(alpha=1.0):
+    """Text colour halfway to the background: readable in light and dark themes
+    (palette(mid) is nearly invisible in some dark themes)."""
+    pal = QApplication.palette()
+    fg, bg = pal.windowText().color(), pal.window().color()
+    mix = [round(f * 0.6 + b * 0.4) for f, b in ((fg.red(), bg.red()), (fg.green(), bg.green()),
+                                                (fg.blue(), bg.blue()))]
+    return "rgba(%d, %d, %d, %d)" % (*mix, round(alpha * 255))
+
+
 def _dim(label):
-    label.setStyleSheet("color: palette(mid);")
+    label.setStyleSheet("color: %s;" % _dim_color())
     return label
 
 
@@ -957,35 +967,72 @@ class MyAppsTab(QWidget):
         super().__init__()
         self._latest = {}   # id -> (tag, asset_url) or Exception
         self._busy = None   # QProcess of a running install
-        layout = QVBoxLayout(self)
-        layout.addWidget(_hint(t("myapps_intro")))
+        self._released = [e for e in catalog.CATALOG if e["kind"] != "link"]
+        outer = QVBoxLayout(self)
+        outer.addWidget(_hint(t("myapps_intro")))
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 6, 0)
         self.rows = {}
-        for entry in catalog.CATALOG:
-            name = QLabel("<b>%s</b>" % html.escape(entry["name"][LANG]))
-            about = _hint(entry["about"][LANG])
-            status = _dim(QLabel(""))
-            link = QLabel('<a href="https://github.com/%s">GitHub</a>' % entry["repo"])
-            link.setOpenExternalLinks(True)
-            button = QPushButton()
-            button.clicked.connect(lambda _=False, e=entry: self._install(e))
-            layout.addWidget(_row((_column(name, about, status), 1), link, button))
-            self.rows[entry["id"]] = (status, button)
+        for group in catalog.GROUPS:
+            header = QLabel(t("myapps_group_" + group))
+            font = header.font()
+            font.setBold(True)
+            font.setPointSizeF(font.pointSizeF() * 1.2)
+            header.setFont(font)
+            header.setContentsMargins(0, 10, 0, 0)
+            layout.addWidget(header)
+            layout.addWidget(_hint(t("myapps_group_%s_hint" % group)))
+            for entry in catalog.CATALOG:
+                if entry["group"] == group:
+                    layout.addWidget(self._card(entry))
         layout.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(content)
+        outer.addWidget(scroll, 1)
         self.log = _hint("")
-        layout.addWidget(self.log)
+        outer.addWidget(self.log)
         refresh = QPushButton(t("myapps_check"))
         refresh.clicked.connect(self.check)
         author = QLabel(t("myapps_author", url=catalog.AUTHOR_URL))
         author.setOpenExternalLinks(True)
-        layout.addWidget(_row(author, None, refresh))
+        outer.addWidget(_row(author, None, refresh))
         self._refresh_rows()
         QTimer.singleShot(500, self.check)
+
+    def _card(self, entry):
+        card = QFrame()
+        card.setObjectName("card")
+        card.setStyleSheet("QFrame#card { border: 1px solid %s; border-radius: 8px; }" % _dim_color(0.5))
+        name = QLabel("<b>%s</b>" % html.escape(entry["name"][LANG]))
+        lines = [name, _hint(entry["about"][LANG])]
+        if entry.get("based_on"):
+            lines.append(_dim(QLabel(t("myapps_based_on", orig=html.escape(entry["based_on"])))))
+        status = _dim(QLabel(""))
+        lines.append(status)
+        home = entry.get("home") or "https://github.com/%s" % entry["repo"]
+        link = QLabel('<a href="%s">%s</a>' % (home, "GitHub" if "github.com" in home else t("myapps_page")))
+        link.setOpenExternalLinks(True)
+        button = QPushButton()
+        if entry["kind"] == "link":
+            button.clicked.connect(lambda _=False, e=entry: osdeps.open_url(e["url"]))
+        else:
+            button.clicked.connect(lambda _=False, e=entry: self._install(e))
+        row = _row((_column(*lines), 1), link, button)
+        row.layout().setContentsMargins(10, 8, 10, 8)
+        box = QVBoxLayout(card)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.addWidget(row)
+        self.rows[entry["id"]] = (status, button)
+        return card
 
     def check(self):
         import threading
 
         def work():
-            for entry in catalog.CATALOG:
+            for entry in self._released:
                 try:
                     self._latest[entry["id"]] = catalog.latest_release(entry)
                 except Exception as e:  # offline / rate limit: show it on the row
@@ -1000,6 +1047,12 @@ class MyAppsTab(QWidget):
         for entry in catalog.CATALOG:
             status, button = self.rows[entry["id"]]
             have = catalog.installed_version(entry)
+            if entry["kind"] == "link":
+                status.setText(t("myapps_by", author=entry["author"])
+                               + (" · " + t("myapps_found") if have else ""))
+                button.setText(t("myapps_open_steam") if entry["url"].startswith("steam:")
+                               else t("myapps_open"))
+                continue
             latest = self._latest.get(entry["id"])
             tag = latest[0] if isinstance(latest, tuple) else ""
             if isinstance(latest, Exception):
@@ -1014,7 +1067,7 @@ class MyAppsTab(QWidget):
             else:
                 button.setText(t("myapps_update") if have else t("myapps_install"))
                 button.setEnabled(bool(tag) and self._busy is None)
-        if len(self._latest) == len(catalog.CATALOG) and getattr(self, "_poll", None):
+        if len(self._latest) == len(self._released) and getattr(self, "_poll", None):
             self._poll.stop()
 
     def _install(self, entry):
