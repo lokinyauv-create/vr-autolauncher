@@ -200,10 +200,10 @@ def pick_from_list(parent, title, rows, multi=False):
 # --- Settings window ---------------------------------------------------------------
 
 class AppRow(QWidget):
-    """One line of the programs list: [x] name / trigger · delay          [✕ | ▶]
+    """One line of the programs list: [x] name / trigger · delay       [⟳] [✕ | ▶]
 
     The checkbox is the auto-start switch; the button force-closes a running program
-    (✕) or starts a stopped one (▶) right now.
+    (✕) or starts a stopped one (▶) right now; ⟳ (only while running) restarts it.
     """
 
     def __init__(self):
@@ -217,10 +217,17 @@ class AppRow(QWidget):
         self.button = QToolButton()
         self.button.setAutoRaise(True)
         self.button.setFixedSize(34, 34)
+        self.restart = QToolButton()
+        self.restart.setAutoRaise(True)
+        self.restart.setFixedSize(34, 34)
+        self.restart.setText("⟳")
+        self.restart.setStyleSheet("QToolButton { color: #3d8bfd; font-size: 20px; }")
+        self.restart.setToolTip(t("tip_restart_now"))
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 3, 6, 3)
         layout.addWidget(self.check)
         layout.addWidget(self.label, 1)
+        layout.addWidget(self.restart)
         layout.addWidget(self.button)
 
     def set_text(self, mark, name, detail):
@@ -240,6 +247,11 @@ class AppRow(QWidget):
         if not known:
             self.button.setToolTip(t("tip_save_first"))
         self.button.setEnabled(known)
+        # Hide, not remove: the row keeps its width so the ✕ / ▶ button doesn't jump.
+        policy = self.restart.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        self.restart.setSizePolicy(policy)
+        self.restart.setVisible(running and known)
 
 
 class SettingsWindow(QWidget):
@@ -486,6 +498,7 @@ class SettingsWindow(QWidget):
             row = AppRow()
             row.check.toggled.connect(lambda on, it=item: self._on_row_enabled(it, on))
             row.button.clicked.connect(lambda _=False, it=item: self._on_row_button(it))
+            row.restart.clicked.connect(lambda _=False, it=item: self._on_row_restart(it))
             self.list.addItem(item)
             self.list.setItemWidget(item, row)
             item.setSizeHint(row.sizeHint())
@@ -552,6 +565,15 @@ class SettingsWindow(QWidget):
             self._show_toast(t("app_force_closed", app=name))
         else:
             self._show_toast(t("app_" + result, app=name), bad=result in ("missing", "failed"))
+        self._tick()
+
+    def _on_row_restart(self, item):
+        """⟳ on a row: close the program and start it again."""
+        name = self.data["apps"][self.list.row(item)].get("name", "")
+        if self.engine.restart(name):
+            self._show_toast(t("app_restarting", app=name))
+        else:
+            self._show_toast(t("tip_save_first"), bad=True)
         self._tick()
 
     def _fill_form(self):
@@ -1161,6 +1183,10 @@ class QtUI:
                 self.menu.addAction(QAction(t(key, app=app["name"]), self.menu,
                                             triggered=lambda _=False, n=app["name"]:
                                             self.engine.toggle_running(n)))
+                if app["running"]:
+                    self.menu.addAction(QAction(t("menu_restart_app", app=app["name"]), self.menu,
+                                                triggered=lambda _=False, n=app["name"]:
+                                                self.engine.restart(n)))
         self.menu.addSeparator()
         self.menu.addAction(QAction(t("menu_open_log"), self.menu,
                                     triggered=lambda: osdeps.open_path(self.log_file)))

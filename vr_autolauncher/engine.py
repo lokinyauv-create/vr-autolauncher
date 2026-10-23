@@ -224,6 +224,49 @@ class Engine:
             return "closed"
         return self.launch_now(name)
 
+    def restart(self, name):
+        """The ⟳ button: close an app and start it again once it is gone.
+
+        Waits in the background; returns False if the app is not in the saved config.
+        """
+        with self._lock:
+            app = self._app(name)
+            if app is None:
+                return False
+            st = self.apps.setdefault(name, AppState())
+            self._procs = osdeps.list_processes()
+            pids = self._terminate_now(app, st)
+            child = st.popen
+            # Keep keep_alive / the trigger from starting a second copy while it shuts down.
+            st.suppressed, st.phase, st.launched, st.popen, st.restarts = True, DONE, False, None, 0
+            self._procs = [p for p in self._procs if p.pid not in pids]
+        log.info("Restarting %s (%d process(es))", name, len(pids))
+        self._notify(t("app_restarting", app=name))
+        thread = threading.Thread(target=self._start_when_gone, args=(name, pids, child), daemon=True)
+        thread.start()
+        self._emit()
+        return True
+
+    def _start_when_gone(self, name, pids, child):
+        def gone():
+            if child is not None:
+                child.poll()  # reap our own child, or its zombie still looks "running"
+            return not any(osdeps.pid_alive(p) for p in pids)
+
+        deadline = time.monotonic() + FORCE_KILL_DELAY
+        while not gone() and time.monotonic() < deadline:
+            time.sleep(0.2)
+        if not gone():
+            self._kill_leftovers(name, pids)
+            for _ in range(10):
+                if gone():
+                    break
+                time.sleep(0.2)
+        time.sleep(0.5)  # let a killed program release its sockets/locks
+        result = self.launch_now(name)
+        if result in ("missing", "failed"):
+            self._notify(t("app_" + result, app=name))
+
     def test_launch(self, raw_app):
         """Launch an app entry as currently edited (maybe unsaved) in the settings window.
 
