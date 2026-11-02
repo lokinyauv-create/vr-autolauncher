@@ -1030,6 +1030,17 @@ class MyAppsTab(QWidget):
         card.setStyleSheet("QFrame#card { border: 1px solid %s; border-radius: 8px; }" % _dim_color(0.5))
         name = QLabel("<b>%s</b>" % html.escape(entry["name"][LANG]))
         lines = [name, _hint(entry["about"][LANG])]
+        if entry.get("details"):
+            lines.append(_hint(entry["details"][LANG]))
+        extra = []
+        if entry.get("repo"):
+            extra.append((t("myapps_whats_new"), "https://github.com/%s/releases" % entry["repo"]))
+        extra += [(item[LANG], item["url"]) for item in entry.get("links", [])]
+        if extra:
+            links = QLabel(" · ".join('<a href="%s">%s</a>' % (url, html.escape(text)) for text, url in extra))
+            links.setOpenExternalLinks(True)
+            links.setWordWrap(True)
+            lines.append(links)
         if entry.get("based_on"):
             lines.append(_dim(QLabel(t("myapps_based_on", orig=html.escape(entry["based_on"])))))
         status = _dim(QLabel(""))
