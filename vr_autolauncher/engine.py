@@ -370,7 +370,12 @@ class Engine:
 
         if st.phase == DONE and app["keep_alive"] and st.launched \
                 and now - st.launched_at > KEEP_ALIVE_GRACE and not self._is_running(app, st):
-            if st.restarts < KEEP_ALIVE_MAX:
+            if st.popen is not None and st.popen.poll() == 0:
+                # A clean exit is not a crash. SteamVR's quit event closes overlays this way
+                # while vrserver is still up, and a restarted overlay relaunches SteamVR.
+                st.launched = False
+                log.info("%s closed normally, not restarting", app["name"])
+            elif st.restarts < KEEP_ALIVE_MAX:
                 st.restarts += 1
                 st.phase, st.deadline = PENDING, now + 3
                 log.warning("%s exited, restarting (%d/%d)", app["name"], st.restarts, KEEP_ALIVE_MAX)
