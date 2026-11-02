@@ -1030,6 +1030,8 @@ class MyAppsTab(QWidget):
         card.setStyleSheet("QFrame#card { border: 1px solid %s; border-radius: 8px; }" % _dim_color(0.5))
         name = QLabel("<b>%s</b>" % html.escape(entry["name"][LANG]))
         lines = [name, _hint(entry["about"][LANG])]
+        if entry.get("favourite"):
+            lines.insert(1, QLabel(t("myapps_favourite")))
         if entry.get("details"):
             lines.append(_hint(entry["details"][LANG]))
         extra = []
