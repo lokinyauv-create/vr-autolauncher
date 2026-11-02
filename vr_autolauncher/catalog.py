@@ -64,10 +64,10 @@ CATALOG = [
                   "uk": "Робочий стіл у VR: FPS на годиннику, інструменти, панель трекерів."},
         "details": {"en": "«Centre» puts monitors and the keyboard where you look, tilted like your head. "
                           "Watch buttons can be reordered in the dashboard, and any program can add its own "
-                          "button (e.g. mute your mic inside Discord). Theme mixer for your own colors.",
+                          "button (e.g. mute your mic or sound inside Discord). Theme mixer for your own colors.",
                     "uk": "«Центрувати» ставить монітори й клавіатуру туди, куди дивишся, з нахилом голови. "
                           "Кнопки годинника переставляються в налаштуваннях, і будь-яка програма може додати "
-                          "свою (наприклад, вимкнути мікрофон у самому Discord). Свої кольори меню."},
+                          "свою (наприклад, вимкнути мікрофон чи звук у самому Discord). Свої кольори меню."},
         "links": [
             {"en": "Own watch buttons", "uk": "Свої кнопки годинника",
              "url": "https://github.com/lokinyauv-create/wayvr/tree/lokinya-build/contrib/watch-buttons"},
