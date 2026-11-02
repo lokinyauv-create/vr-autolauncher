@@ -6,7 +6,8 @@ Entries are grouped: "mine" (her own programs), "modified" (her builds of other 
 programs) and "recommended" (other authors' programs, only linked).
 "script" entries install with the repo's one-click get.sh; "appimage" entries download the
 release's AppImage into ~/Applications; "link" entries just open a page.
-Optional: "details" (a longer explanation) and "links" (extra pages: {"en", "uk", "url"}).
+Optional: "details" (a longer explanation), "links" (extra pages: {"en", "uk", "url"}) and
+"favourite" (True = she strongly recommends it; the card gets a badge).
 """
 import glob
 import json
@@ -85,6 +86,28 @@ CATALOG = [
                   "uk": "Вмикає й вимикає базові станції разом зі SteamVR; сторінка «Кімната» із зонами."},
         "based_on": "SteamVR Lighthouse Manager · Alumi Shinamo",
         "version_file": "~/.local/share/base-station-manager/VERSION",
+    },
+    {
+        "id": "spacesync",
+        "group": "modified",
+        "repo": "lokinyauv-create/OpenVR-SpaceSync",
+        "kind": "script",
+        "favourite": True,
+        "name": {"en": "SpaceSync for Linux (Lokinya's build)", "uk": "SpaceSync для Linux (збірка Lokinya)"},
+        "about": {"en": "Keeps Lighthouse trackers and controllers lined up with a Quest (Steam Link, ALVR).",
+                  "uk": "Тримає трекери й контролери Lighthouse разом зі шоломом Quest (Steam Link, ALVR)."},
+        "details": {"en": "Needs one tracker mounted on the headset. Calibrate once, then it stays aligned the whole "
+                          "session, no drift. Linux port with Ukrainian language and voice cues. Space Calibrator "
+                          "is switched off while SpaceSync is installed.",
+                    "uk": "Потрібен один трекер на шоломі. Калібруєш один раз — і все тримається разом цілу гру, "
+                          "без дрейфу. Порт на Linux з українською мовою й голосовими підказками. Space Calibrator "
+                          "вимикається, поки стоїть SpaceSync."},
+        "links": [
+            {"en": "Original SpaceSync", "uk": "Оригінальний SpaceSync",
+             "url": "https://github.com/shinyflvre/OpenVR-SpaceSync"},
+        ],
+        "based_on": "OpenVR-SpaceSync · Shinyflvres",
+        "version_file": "~/.local/opt/SpaceSync/VERSION",
     },
     {
         "id": "ovr-advanced-settings",
