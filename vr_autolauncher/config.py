@@ -35,6 +35,10 @@ APP_DEFAULTS = {
     "close_delay": 0,
     # Start it again if it exits/crashes while the trigger is still up.
     "keep_alive": False,
+    # Restart it when SteamVR's compositor restarts (e.g. after a compositor crash).
+    # SteamVR overlays such as WayVR otherwise keep using textures from the dead
+    # compositor; SteamVR fails to import them and can crash again a few minutes later.
+    "restart_with_compositor": False,
     # Extra environment variables for the launched program.
     "env": {},
 }
@@ -70,6 +74,7 @@ LINUX_DEFAULTS = {
             "command": "~/Applications/WayVR-*.AppImage --openvr --show --replace",
             "running": ["wayvr"],
             "keep_alive": True,
+            "restart_with_compositor": True,
         },
         {
             "name": "VRCX",
@@ -145,6 +150,7 @@ def normalize_app(raw):
     app["trigger"] = "any" if app["trigger"] == "any" else "all"
     app["delay"] = max(0.0, float(app["delay"]))
     app["close_delay"] = max(0.0, float(app["close_delay"]))
+    app["restart_with_compositor"] = bool(app["restart_with_compositor"])
     app["env"] = {str(k): str(v) for k, v in dict(app["env"] or {}).items()}
     return app
 
