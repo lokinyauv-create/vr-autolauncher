@@ -61,6 +61,7 @@ class Engine:
         self._paused_pids = set()
         self._inhibitor = osdeps.IdleInhibitor()
         self._children = []  # Popen objects to reap
+        self._compositor_pids = set()
 
     # --- public API (thread-safe) -------------------------------------------
 
@@ -331,6 +332,7 @@ class Engine:
             self._names_up = set().union(*(p.names for p in self._procs)) if self._procs else set()
 
             self._update_session()
+            self._check_compositor_restart()
             for app in self.cfg["apps"]:
                 self._update_app(app, now)
             # Forget apps removed from the config.
@@ -338,6 +340,25 @@ class Engine:
             for name in list(self.apps):
                 if name not in names:
                     del self.apps[name]
+
+    def _check_compositor_restart(self):
+        """A new vrcompositor process appeared while an old one existed before (or the old
+        one died and a new one started between scans): restart the apps that ask for it."""
+        pids = {p.pid for p in self._procs if "vrcompositor" in p.names}
+        restarted = bool(self._compositor_pids) and bool(pids) and not (pids & self._compositor_pids)
+        if pids:
+            self._compositor_pids = pids
+        elif "vrserver" not in self._names_up:
+            self._compositor_pids = set()  # SteamVR fully closed: the next start is not a restart
+        if not restarted or self.cfg["paused"]:
+            return
+        for app in self.cfg["apps"]:
+            st = self.apps.get(app["name"])
+            if not app["restart_with_compositor"] or st is None or st.suppressed:
+                continue
+            if self._is_running(app, st):
+                log.warning("%s: SteamVR compositor restarted, restarting it too", app["name"])
+                self.restart(app["name"])
 
     def _update_app(self, app, now):
         st = self.apps.setdefault(app["name"], AppState())

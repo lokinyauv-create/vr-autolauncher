@@ -189,6 +189,7 @@ prefer editing JSON.
 | `running` | Substrings of a process name/path that mean "already running" — the launch is skipped. |
 | `close_on_exit` | Terminate the app when the `when` processes go away (only if we started it). |
 | `keep_alive` | Start it again if it exits while the trigger is still up (max 5 restarts). |
+| `restart_with_compositor` | Restart it when SteamVR's compositor restarts (e.g. after a compositor crash) while SteamVR itself keeps running. Overlays such as WayVR otherwise keep sending textures from the dead compositor, which SteamVR can't import and can crash on again. On by default for WayVR. |
 | `env` | Extra environment variables, e.g. `{"APPIMAGE_EXTRACT_AND_RUN": "1"}` (not for `steam://` links). |
 | `paused` (top level) | Don't launch anything for now; the tray has a toggle for it. |
 | `session.processes` | What counts as "in VR" for the session actions (default: `vrserver`). |
